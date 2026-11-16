@@ -49,11 +49,14 @@ export interface Actor {
   proyectos: number
 }
 
+export const TIPOS_OPORTUNIDAD = ['convocatoria', 'financiacion', 'mentoria', 'infraestructura'] as const
+export type TipoOportunidad = (typeof TIPOS_OPORTUNIDAD)[number]
+
 export interface Oportunidad {
   id: string
   titulo: string
   entidad: string
-  tipo: 'convocatoria' | 'financiacion' | 'mentoria' | 'infraestructura'
+  tipo: TipoOportunidad
   monto: number | null
   cierra_en: string
   areas: Area[]

@@ -41,6 +41,33 @@ def _comunes(a: str, b: str, maximo: int = 4) -> list[str]:
     return [t for t in dict.fromkeys(b.split(", ")) if t and textos.palabras(t) & pa][:maximo]
 
 
+def _factor_habilidades(usuario: Usuario, proyecto: Proyecto) -> tuple[float, list[str]]:
+    """Calcula el solapamiento directo entre las habilidades del usuario y lo que el proyecto requiere.
+
+    Devuelve (factor_entre_0_y_1, lista_de_habilidades_que_coinciden).
+    """
+    if not usuario.habilidades:
+        return 0.0, []
+
+    # Requerimientos del proyecto: etiquetas + palabras de necesidades
+    etiquetas_norm = {textos.normalizar(e) for e in (proyecto.etiquetas or [])}
+    necesidades_palabras = textos.palabras(proyecto.necesidades or "")
+
+    coincidentes: list[str] = []
+    for hab in usuario.habilidades:
+        hab_norm = textos.normalizar(hab)
+        hab_palabras = textos.palabras(hab)
+        if hab_norm in etiquetas_norm or (hab_palabras and hab_palabras & necesidades_palabras):
+            coincidentes.append(hab)
+
+    if not coincidentes:
+        return 0.0, []
+
+    total_req = max(1, min(4, len(proyecto.etiquetas or []) + (1 if proyecto.necesidades else 0)))
+    score = min(1.0, len(coincidentes) / total_req)
+    return score, coincidentes
+
+
 def _semantica(db, proyecto: Proyecto, oportunidades: list[Oportunidad]) -> dict[uuid.UUID, float] | None:
     """Similitud proyecto↔oportunidades, solo con embeddings: la léxica ya la cubre la regla de etiquetas."""
     if codificador.obtener() is None:
@@ -82,17 +109,40 @@ def colaboradores_sugeridos(proyecto_id: uuid.UUID, db: DbSession, _: UsuarioAct
     candidatos = [u for u in db.scalars(select(Usuario).where(Usuario.activo.is_(True), Usuario.rol != Rol.ADMIN))
                   if u.id not in ya and textos.usuario(u)]
     consulta = textos.necesidades(proyecto)
-    resultados, metodo = ordenar(db, consulta, "usuario", candidatos, textos.usuario, limite)
-    salida = []
+    # Evaluamos todos los candidatos válidos para aplicar la ponderación con habilidades antes de recortar al límite
+    resultados, metodo = ordenar(db, consulta, "usuario", candidatos, textos.usuario, limite=len(candidatos) or 1)
+
+    candidatos_ponderados = []
     for r in resultados:
         u: Usuario = r.objeto
-        comunes = _comunes(consulta, ", ".join(u.habilidades + u.intereses))
-        razon = f"Su perfil coincide en un {_pct(r)} con lo que busca el proyecto"
-        salida.append(Sugerencia(
-            id=u.id, tipo="usuario", titulo=u.nombre, detalle=u.programa or u.rol.value, similitud=r.similitud,
-            razon=razon + (f": {', '.join(comunes)}." if comunes else "."),
-        ))
-    return RespuestaSugerencias(metodo=metodo, resultados=salida)
+        factor_hab, habs_match = _factor_habilidades(u, proyecto)
+        # Combinamos: 65% similitud semántica/léxica base + 35% factor directo de habilidades
+        score_combinado = round(0.65 * r.similitud + 0.35 * factor_hab, 3) if factor_hab > 0 else r.similitud
+
+        if habs_match:
+            razon = f"Coincide en habilidades clave ({', '.join(habs_match)}) con un {round(score_combinado * 100)} % de afinidad"
+        else:
+            comunes = _comunes(consulta, ", ".join(u.habilidades + u.intereses))
+            razon = f"Su perfil coincide en un {round(score_combinado * 100)} % con lo que busca el proyecto"
+            if comunes:
+                razon += f": {', '.join(comunes)}."
+            else:
+                razon += "."
+
+        candidatos_ponderados.append(
+            Sugerencia(
+                id=u.id,
+                tipo="usuario",
+                titulo=u.nombre,
+                detalle=u.programa or u.rol.value,
+                similitud=score_combinado,
+                razon=razon,
+            )
+        )
+
+    # Ordenamos por score combinado descendente y aplicamos el límite solicitado
+    candidatos_ponderados.sort(key=lambda s: s.similitud, reverse=True)
+    return RespuestaSugerencias(metodo=metodo, resultados=candidatos_ponderados[:limite])
 
 
 @router.get("/buscar", response_model=RespuestaSugerencias)

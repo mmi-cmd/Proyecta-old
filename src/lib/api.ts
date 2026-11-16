@@ -1,6 +1,6 @@
 import { apiHabilitada, pedir } from './http'
 import { actoresMock, oportunidadesMock, proyectosMock } from '@/data/mock'
-import type { Actor, Metricas, NuevoProyecto, Oportunidad, Proyecto } from './types'
+import type { Actor, Metricas, NuevoProyecto, Oportunidad, Proyecto, TipoOportunidad } from './types'
 import { ESTADOS } from './types'
 import { slug } from './format'
 
@@ -49,10 +49,42 @@ export async function listarActores(): Promise<Actor[]> {
   return actoresMock
 }
 
-export async function listarOportunidades(): Promise<Oportunidad[]> {
-  if (apiHabilitada) return pedir<Oportunidad[]>('/oportunidades')
+export interface FiltrosOportunidades {
+  q?: string
+  area?: string
+  ods?: number
+  tipo?: TipoOportunidad
+  abiertas?: boolean
+}
+
+export async function listarOportunidades(filtros?: FiltrosOportunidades): Promise<Oportunidad[]> {
+  if (apiHabilitada) {
+    const params = new URLSearchParams()
+    if (filtros?.q) params.set('q', filtros.q)
+    if (filtros?.area) params.set('area', filtros.area)
+    if (filtros?.ods) params.set('ods', String(filtros.ods))
+    if (filtros?.tipo) params.set('tipo', filtros.tipo)
+    if (filtros?.abiertas !== undefined) params.set('abiertas', String(filtros.abiertas))
+    const query = params.toString()
+    return pedir<Oportunidad[]>(query ? `/oportunidades?${query}` : '/oportunidades')
+  }
   await espera(150)
-  return oportunidadesMock
+  const hoy = new Date().toISOString().slice(0, 10)
+  return oportunidadesMock.filter((o) => {
+    if (filtros?.abiertas && o.cierra_en < hoy) return false
+    if (filtros?.tipo && o.tipo !== filtros.tipo) return false
+    if (filtros?.area && !o.areas.includes(filtros.area as any)) return false
+    if (filtros?.ods && !o.ods?.includes(filtros.ods)) return false
+    if (filtros?.q) {
+      const q = filtros.q.toLowerCase()
+      const coincide =
+        o.titulo.toLowerCase().includes(q) ||
+        o.entidad.toLowerCase().includes(q) ||
+        (o.descripcion?.toLowerCase().includes(q) ?? false)
+      if (!coincide) return false
+    }
+    return true
+  })
 }
 
 export function calcularMetricas(proyectos: Proyecto[], actores: Actor[]): Metricas {

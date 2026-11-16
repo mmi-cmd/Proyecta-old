@@ -72,6 +72,37 @@ def test_colaboradores_por_perfil(client, estudiante, embeddings_falsos):
     assert client.get(f"/api/ia/proyectos/{pid}/colaboradores", headers=estudiante).json()["resultados"] == []
 
 
+def test_colaboradores_pondera_habilidad_exacta_y_excluye_inactivos(client, estudiante, db):
+    from app.modules.usuarios.models import Usuario
+    # Proyecto con necesidad específica de React
+    pid = _crear(client, estudiante, necesidades="Desarrollo frontend en React", etiquetas=["react", "web"])
+
+    # Usuario A: habilidades con React
+    _con_perfil(client, "reactdev@ufpso.edu.co", "Especialista React",
+                programa="Ingeniería de Sistemas", habilidades=["React", "TypeScript"])
+
+    # Usuario B: perfil afín pero sin la habilidad exacta de React
+    _con_perfil(client, "disenador@ufpso.edu.co", "Diseñador Web",
+                programa="Diseño", habilidades=["Figma", "CSS"], intereses=["web"])
+
+    # Usuario C: tiene React pero está inactivo
+    _con_perfil(client, "inactivo@ufpso.edu.co", "Inactivo React",
+                programa="Ingeniería de Sistemas", habilidades=["React"])
+    u_inactivo = db.query(Usuario).filter_by(email="inactivo@ufpso.edu.co").first()
+    u_inactivo.activo = False
+    db.commit()
+
+    res = client.get(f"/api/ia/proyectos/{pid}/colaboradores", headers=estudiante).json()
+    titulos = [r["titulo"] for r in res["resultados"]]
+
+    # El usuario inactivo nunca debe aparecer
+    assert "Inactivo React" not in titulos
+
+    # El que tiene la habilidad exacta de React debe quedar de primero con alta ponderación
+    assert titulos[0] == "Especialista React"
+    assert "React" in res["resultados"][0]["razon"]
+
+
 def test_busqueda_semantica_de_oportunidades(client, admin, embeddings_falsos):
     agua = _oportunidad(client, admin, "Fondo de acueductos rurales", "Financia sistemas de agua potable.", ["Ambiente"])
     _oportunidad(client, admin, "Mentoría para apps", "Acompañamiento a startups de software.", ["Tecnología"])

@@ -17,3 +17,6 @@ backend/.venv/
 __pycache__/
 *.pyc
 *.tsbuildinfo
+
+.atl/
+Docs

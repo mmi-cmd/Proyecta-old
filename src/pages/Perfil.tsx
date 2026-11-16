@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { Check, Handshake, Loader2, MessageCircle, MessageSquare, Send, Sparkles, UserRound, X } from 'lucide-react'
+import { Check, FilterX, Handshake, Loader2, MessageCircle, MessageSquare, Send, Sparkles, UserRound, X } from 'lucide-react'
 import {
   actualizarPerfil,
   listaATexto,
@@ -18,7 +18,14 @@ import { formatDate } from '@/lib/format'
 import { useNoLeidos } from '@/hooks/useNoLeidos'
 import { ChatSolicitud } from '@/components/ChatSolicitud'
 
-const ESTADO_SOLICITUD: Record<Solicitud['estado'], string> = {
+const ESTADO_SOLICITUD_LABEL: Record<Solicitud['estado'], string> = {
+  pendiente: 'Pendiente',
+  aceptada: 'Activa',
+  rechazada: 'Rechazada',
+  cancelada: 'Anulada',
+}
+
+const ESTADO_SOLICITUD_CLASS: Record<Solicitud['estado'], string> = {
   pendiente: 'bg-amber-100 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300',
   aceptada: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-300',
   rechazada: 'bg-rose-100 text-rose-800 dark:bg-rose-500/15 dark:text-rose-300',
@@ -138,6 +145,8 @@ function Alianzas({ alianzas, alCambiar, noLeidos }: { alianzas: Solicitud[]; al
   const [ocupado, setOcupado] = useState<string | null>(null)
   const [error, setError] = useState('')
   const [conversando, setConversando] = useState<Set<string>>(new Set())
+  const [estadoFiltro, setEstadoFiltro] = useState<Solicitud['estado'] | ''>('')
+  const [proyectoFiltro, setProyectoFiltro] = useState<string>('')
   const { hash } = useLocation()
 
   // Un aviso de mensajes lleva a /perfil#solicitud-<id>: abrir esa conversación.
@@ -153,6 +162,31 @@ function Alianzas({ alianzas, alCambiar, noLeidos }: { alianzas: Solicitud[]; al
       return nuevo
     })
 
+  const proyectosDisponibles = useMemo(() => {
+    const mapa = new Map<string, string>()
+    for (const a of alianzas) {
+      if (!mapa.has(a.proyecto_id)) {
+        mapa.set(a.proyecto_id, a.proyecto_titulo)
+      }
+    }
+    return Array.from(mapa.entries()).map(([id, titulo]) => ({ id, titulo }))
+  }, [alianzas])
+
+  const alianzasFiltradas = useMemo(() => {
+    return alianzas.filter((a) => {
+      if (estadoFiltro && a.estado !== estadoFiltro) return false
+      if (proyectoFiltro && a.proyecto_id !== proyectoFiltro) return false
+      return true
+    })
+  }, [alianzas, estadoFiltro, proyectoFiltro])
+
+  const limpiarFiltros = () => {
+    setEstadoFiltro('')
+    setProyectoFiltro('')
+  }
+
+  const filtrosActivos = estadoFiltro !== '' || proyectoFiltro !== ''
+
   const botonConversar = (s: Solicitud) => (
     <button className="btn-ghost text-xs" onClick={() => alternarConversacion(s.id)} aria-expanded={conversando.has(s.id)}>
       <MessageCircle size={14} aria-hidden />
@@ -162,8 +196,9 @@ function Alianzas({ alianzas, alCambiar, noLeidos }: { alianzas: Solicitud[]; al
       )}
     </button>
   )
-  const porResponder = alianzas.filter((a) => a.por_responder)
-  const resto = alianzas.filter((a) => !a.por_responder)
+
+  const porResponder = alianzasFiltradas.filter((a) => a.por_responder)
+  const resto = alianzasFiltradas.filter((a) => !a.por_responder)
 
   const actuar = async (s: Solicitud, accion: 'aceptar' | 'rechazar' | 'cancelar') => {
     setOcupado(s.id)
@@ -179,9 +214,18 @@ function Alianzas({ alianzas, alCambiar, noLeidos }: { alianzas: Solicitud[]; al
   }
 
   return (
-    <section>
-      <SectionTitle>Alianzas</SectionTitle>
+    <section className="space-y-4">
+      <div className="flex flex-wrap items-end justify-between gap-2">
+        <SectionTitle>Alianzas</SectionTitle>
+        {alianzas.length > 0 && (
+          <p className="text-xs text-slate-500 dark:text-slate-400">
+            {alianzasFiltradas.length} de {alianzas.length} registradas
+          </p>
+        )}
+      </div>
+
       {error && <p className="mb-2 text-sm text-rose-600">{error}</p>}
+
       {alianzas.length === 0 ? (
         <EmptyState
           titulo="Sin alianzas todavía"
@@ -189,67 +233,144 @@ function Alianzas({ alianzas, alCambiar, noLeidos }: { alianzas: Solicitud[]; al
         />
       ) : (
         <div className="space-y-4">
-          {porResponder.length > 0 && (
-            <ul className="space-y-2">
-              {porResponder.map((s) => (
-                <li key={s.id} className="card border-accent-300 p-4 dark:border-accent-500/40">
-                  <p className="text-sm text-slate-800 dark:text-slate-200">
-                    <Handshake size={15} className="mr-1.5 inline text-accent-600" aria-hidden />
-                    {s.tipo === 'solicitud' ? (
-                      <><b>{s.usuario_nombre}</b> quiere unirse a <Link className="font-medium hover:underline" to={`/proyectos/${s.proyecto_id}`}>{s.proyecto_titulo}</Link></>
-                    ) : (
-                      <>Te invitaron a <Link className="font-medium hover:underline" to={`/proyectos/${s.proyecto_id}`}>{s.proyecto_titulo}</Link></>
-                    )}
-                  </p>
-                  {s.mensaje && <p className="mt-1 text-sm text-slate-600 italic dark:text-slate-400">«{s.mensaje}»</p>}
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    <button className="btn-primary" disabled={ocupado === s.id} onClick={() => actuar(s, 'aceptar')}>
-                      <Check size={15} aria-hidden /> Aceptar
-                    </button>
-                    <button className="btn-ghost" disabled={ocupado === s.id} onClick={() => actuar(s, 'rechazar')}>
-                      <X size={15} aria-hidden /> Rechazar
-                    </button>
-                    {botonConversar(s)}
-                  </div>
-                  {conversando.has(s.id) && (
-                    <div className="mt-3">
-                      <ChatSolicitud solicitud={s} />
-                    </div>
-                  )}
-                </li>
-              ))}
-            </ul>
-          )}
+          {/* Barra de filtros de alianzas */}
+          <div className="card flex flex-wrap items-end gap-3 p-3">
+            <div className="w-full sm:w-44">
+              <label className="label" htmlFor="filtro-alianza-estado">Estado</label>
+              <select
+                id="filtro-alianza-estado"
+                className="input text-xs"
+                value={estadoFiltro}
+                onChange={(e) => setEstadoFiltro(e.target.value as Solicitud['estado'] | '')}
+              >
+                <option value="">Todos los estados</option>
+                <option value="aceptada">Activa</option>
+                <option value="pendiente">Pendiente</option>
+                <option value="rechazada">Rechazada</option>
+                <option value="cancelada">Anulada</option>
+              </select>
+            </div>
 
-          {resto.length > 0 && (
-            <ul className="card divide-y divide-slate-200 dark:divide-slate-800">
-              {resto.map((s) => (
-                <li key={s.id} className="flex flex-wrap items-center gap-3 px-5 py-3 text-sm">
-                  <div className="min-w-0 flex-1">
-                    <p className="text-slate-800 dark:text-slate-200">
-                      {s.tipo === 'solicitud' ? `Solicitud de ${s.usuario_nombre}` : `Invitación a ${s.usuario_nombre}`} ·{' '}
-                      <Link className="font-medium hover:underline" to={`/proyectos/${s.proyecto_id}`}>{s.proyecto_titulo}</Link>
-                    </p>
-                    <p className="text-xs text-slate-500 dark:text-slate-400">
-                      {formatDate(s.creado_en)}
-                      {s.respuesta && ` · «${s.respuesta}»`}
-                    </p>
-                  </div>
-                  <Badge className={ESTADO_SOLICITUD[s.estado]}>{s.estado}</Badge>
-                  {botonConversar(s)}
-                  {s.estado === 'pendiente' && (
-                    <button className="btn-ghost text-xs" disabled={ocupado === s.id} onClick={() => actuar(s, 'cancelar')}>
-                      Cancelar
-                    </button>
+            <div className="min-w-48 flex-1">
+              <label className="label" htmlFor="filtro-alianza-proyecto">Proyecto</label>
+              <select
+                id="filtro-alianza-proyecto"
+                className="input text-xs"
+                value={proyectoFiltro}
+                onChange={(e) => setProyectoFiltro(e.target.value)}
+              >
+                <option value="">Todos los proyectos</option>
+                {proyectosDisponibles.map((p) => (
+                  <option key={p.id} value={p.id}>{p.titulo}</option>
+                ))}
+              </select>
+            </div>
+
+            {filtrosActivos && (
+              <button
+                type="button"
+                className="btn-ghost flex h-9 items-center gap-1 text-xs text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white"
+                onClick={limpiarFiltros}
+              >
+                <FilterX size={13} aria-hidden /> Restablecer filtros
+              </button>
+            )}
+          </div>
+
+          {alianzasFiltradas.length === 0 ? (
+            <EmptyState
+              titulo="No hay alianzas con estos filtros"
+              detalle="Prueba seleccionando otro estado o proyecto."
+              accion={
+                <button type="button" className="btn-secondary text-xs" onClick={limpiarFiltros}>
+                  Limpiar filtros
+                </button>
+              }
+            />
+          ) : (
+            <>
+              {porResponder.length > 0 && (
+                <div className="space-y-2">
+                  <h3 className="text-xs font-semibold uppercase tracking-wider text-accent-700 dark:text-accent-400">
+                    Requieren tu respuesta ({porResponder.length})
+                  </h3>
+                  <ul className="space-y-2">
+                    {porResponder.map((s) => (
+                      <li key={s.id} className="card border-accent-300 p-4 dark:border-accent-500/40">
+                        <div className="flex items-start justify-between gap-2">
+                          <p className="text-sm text-slate-800 dark:text-slate-200">
+                            <Handshake size={15} className="mr-1.5 inline text-accent-600" aria-hidden />
+                            {s.tipo === 'solicitud' ? (
+                              <><b>{s.usuario_nombre}</b> quiere unirse como colaborador a <Link className="font-medium hover:underline" to={`/proyectos/${s.proyecto_id}`}>{s.proyecto_titulo}</Link></>
+                            ) : (
+                              <>Te invitaron a colaborar en <Link className="font-medium hover:underline" to={`/proyectos/${s.proyecto_id}`}>{s.proyecto_titulo}</Link></>
+                            )}
+                          </p>
+                          <Badge className={ESTADO_SOLICITUD_CLASS[s.estado]}>
+                            {ESTADO_SOLICITUD_LABEL[s.estado]}
+                          </Badge>
+                        </div>
+                        {s.mensaje && <p className="mt-1 text-sm text-slate-600 italic dark:text-slate-400">«{s.mensaje}»</p>}
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <button className="btn-primary" disabled={ocupado === s.id} onClick={() => actuar(s, 'aceptar')}>
+                            <Check size={15} aria-hidden /> Aceptar
+                          </button>
+                          <button className="btn-ghost" disabled={ocupado === s.id} onClick={() => actuar(s, 'rechazar')}>
+                            <X size={15} aria-hidden /> Rechazar
+                          </button>
+                          {botonConversar(s)}
+                        </div>
+                        {conversando.has(s.id) && (
+                          <div className="mt-3">
+                            <ChatSolicitud solicitud={s} />
+                          </div>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {resto.length > 0 && (
+                <div className="space-y-2">
+                  {porResponder.length > 0 && (
+                    <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                      Otras alianzas ({resto.length})
+                    </h3>
                   )}
-                  {conversando.has(s.id) && (
-                    <div className="basis-full">
-                      <ChatSolicitud solicitud={s} />
-                    </div>
-                  )}
-                </li>
-              ))}
-            </ul>
+                  <ul className="card divide-y divide-slate-200 dark:divide-slate-800">
+                    {resto.map((s) => (
+                      <li key={s.id} className="flex flex-wrap items-center gap-3 px-5 py-3 text-sm">
+                        <div className="min-w-0 flex-1">
+                          <p className="text-slate-800 dark:text-slate-200">
+                            {s.tipo === 'solicitud' ? `Solicitud de ${s.usuario_nombre}` : `Invitación a ${s.usuario_nombre}`} ·{' '}
+                            <Link className="font-medium hover:underline" to={`/proyectos/${s.proyecto_id}`}>{s.proyecto_titulo}</Link>
+                          </p>
+                          <p className="text-xs text-slate-500 dark:text-slate-400">
+                            {formatDate(s.creado_en)}
+                            {s.respuesta && ` · Respuesta: «${s.respuesta}»`}
+                          </p>
+                        </div>
+                        <Badge className={ESTADO_SOLICITUD_CLASS[s.estado]}>
+                          {ESTADO_SOLICITUD_LABEL[s.estado]}
+                        </Badge>
+                        {botonConversar(s)}
+                        {s.estado === 'pendiente' && (
+                          <button className="btn-ghost text-xs" disabled={ocupado === s.id} onClick={() => actuar(s, 'cancelar')}>
+                            Anular
+                          </button>
+                        )}
+                        {conversando.has(s.id) && (
+                          <div className="basis-full">
+                            <ChatSolicitud solicitud={s} />
+                          </div>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </>
           )}
         </div>
       )}
